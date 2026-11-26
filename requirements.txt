@@ -1,0 +1,6 @@
+google-genai
+keyboard
+mouse
+pystray
+pypdf
+pillow

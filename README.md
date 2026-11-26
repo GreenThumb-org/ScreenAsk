@@ -1,78 +1,78 @@
 # ScreenAsk
 
-Press one key. Get AI feedback on your screen.
+Press one key or mouse button. Get AI feedback on your screen.
 
 ## How it works
 
-1. You press **F10**.
-2. ScreenAsk saves a screenshot in a folder. You see nothing.
-3. The image and your standard prompt go to Gemini.
-4. The answer shows up in a see-through box at the bottom left.
-
-- Left click on the box = close it.
-- Right click on the box = copy the text and close it.
-- The box hides itself after 20 seconds.
-- ScreenAsk runs in the background. Look for its icon bottom right (maybe under the `^` arrow).
+1. You press your trigger key or mouse button (default: **F10**).
+2. ScreenAsk saves a screenshot in your folder silently.
+3. If there are any `.pdf` files in your screenshot folder, their text is automatically sent along as reference context.
+4. The image and prompt go to your **Primary Model** (with automatic switch to your **Fallback Model** if the primary model hits a rate limit or overload error).
+5. The answer appears in a see-through box at the bottom left:
+   - **Any key or left click** = close the box.
+   - **Right click** = copy the text to clipboard and close the box.
+   - Auto-hides after 20 seconds (configurable).
+- ScreenAsk runs in the background via the system tray icon (bottom right, possibly under the `^` arrow).
 
 ## Setup
 
-**1. Install the parts:**
+**1. Install dependencies:**
 
+```bash
+pip install -r requirements.txt
 ```
-pip install google-genai keyboard pystray pillow
-```
 
-**2. Get a free key:**
-Go to `aistudio.google.com`, sign in, click **Get API key**, then **Create API key**.
-The key starts with `AIza`.
+**2. Get a free API key:**
+Go to `aistudio.google.com`, sign in, click **Get API key**, then **Create API key** (starts with `AIza`).
 
-**3. Start it:**
+**3. Start ScreenAsk:**
 
-```
+```bash
 python screenask.py
 ```
 
-**4. Fill in the window:**
+**4. Configure the window:**
 
-| Field | Value |
+| Field | Recommended Value |
 |---|---|
-| API key | your `AIza...` key |
-| Model | `gemini-3.5-flash-lite` |
-| Hotkey | `f10` (or something like `ctrl+shift+s`) |
-| Prompt | what the AI should do with every screenshot |
+| API key | Your `AIza...` key |
+| Primary Model | `gemini-4-hydrogen` |
+| Fallback Model | `gemini-3.8-flash` (used automatically on `429`/`503` errors) |
+| Screenshot Key / Mouse Button | Click **Taste / Maus wählen** and press any key combo or mouse button |
+| Screenshot folder | Folder for saved screenshots (and optional reference PDFs) |
+| Standard prompt | Instruction sent with every screenshot |
 
 Click **Save**, then **Test capture** to try it.
 
-**5. Run it without a console window:**
+**5. Run without a console window:**
 
-```
+```bash
 pythonw screenask.py
 ```
 
-Tick **Start with Windows** if you want it to start by itself.
+Tick **Start with Windows** in the settings window to launch automatically at login.
 
-## The tray icon
+## Tray Icon
 
-- Click it = open the window.
-- Right click = open the screenshot folder, or **Quit**.
-- The X on the window only hides it. ScreenAsk keeps running.
-- **Quit** is the only way to really stop it.
+- **Left click** = open settings window.
+- **Right click** = open screenshot folder, or **Quit**.
+- Closing the settings window (`X`) only hides it to the tray; use **Quit** to exit completely.
 
-## Where things are saved
+## Where files are saved
 
-- Screenshots: `Pictures\ScreenAsk` (you can change this in the window)
-- Settings: `%APPDATA%\ScreenAsk\config.json`
+- **Screenshots & reference PDFs:** `Pictures\ScreenAsk` (changeable in settings)
+- **Settings:** `%APPDATA%\ScreenAsk\config.json`
 
-## If something goes wrong
+## Troubleshooting
 
 | Message | What to do |
 |---|---|
-| `404 NOT_FOUND` | Wrong model name. Use `gemini-3.5-flash-lite`. |
-| `429` | Free limit reached. Wait a bit, or try another model. |
-| `401` or `403` | Wrong or old key. Make a new one in AI Studio. |
-| Hotkey does nothing | An old copy is still running. Tray icon, then **Quit**, then start again. |
-| Black screenshot in a game | Use borderless windowed mode. |
+| `404 NOT_FOUND` | Check the spelling of your Primary/Fallback Model name. |
+| `429` or `503` | Rate limit or temporary overload. Set a Fallback Model or wait a moment. |
+| `401` or `403` | Invalid or expired API key. Generate a new key in Google AI Studio. |
+| Hotkey does nothing | Another instance is already running. Right-click tray icon -> **Quit**, then restart. |
+| Black screenshot in a game | Switch the game to borderless windowed mode. |
 
-## Good to know
+## Privacy note
 
-On the free plan, Google may use what you send to improve its products. Do not press the key while passwords or bank pages are on screen.
+On the free API tier, Google may use submitted prompts and screenshots to improve its products. Avoid capturing sensitive data such as passwords or banking pages.
