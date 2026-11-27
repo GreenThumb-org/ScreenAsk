@@ -73,6 +73,12 @@ Tick **Start with Windows** in the settings window to launch automatically at lo
 | Hotkey does nothing | Another instance is already running. Right-click tray icon -> **Quit**, then restart. |
 | Black screenshot in a game | Switch the game to borderless windowed mode. |
 
+## Prompt Reference
+
+```
+Look at this screenshot, it should contain a quiz about cosmology, including topics like keplers laws, other cosmic history stuff and the solar system, in the middle of the screen. Please provide the correct answer from A (top) to D (bottom), sometimes there might be more answer possibilities. Adjust the answer letters if thats the case. only give me the letter A-X (X being the max letter)IF YOU DONT SEE ANY ANSWER POSSIBILITIES APPLY THIS RULE: There WILL BE questions where you have to provide an answer, so its not multiple choice. In that case write out the answer WITHIN 1-10 WORDS, NOT OVER. Check the reference folder for accurate answers.
+```
+
 ## Privacy note
 
 On the free API tier, Google may use submitted prompts and screenshots to improve its products. Avoid capturing sensitive data such as passwords or banking pages.
