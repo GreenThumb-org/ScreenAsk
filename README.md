@@ -76,7 +76,19 @@ Tick **Start with Windows** in the settings window to launch automatically at lo
 ## Prompt Reference
 
 ```
-Look at this screenshot, it should contain a quiz about cosmology, including topics like keplers laws, other cosmic history stuff and the solar system, in the middle of the screen. Please provide the correct answer from A (top) to D (bottom), sometimes there might be more answer possibilities. Adjust the answer letters if thats the case. only give me the letter A-X (X being the max letter)IF YOU DONT SEE ANY ANSWER POSSIBILITIES APPLY THIS RULE: There WILL BE questions where you have to provide an answer, so its not multiple choice. In that case write out the answer WITHIN 1-10 WORDS, NOT OVER. Check the reference folder for accurate answers.
+Examine the screenshot and locate the cosmology quiz near the center of the screen (covering topics such as Kepler's laws, cosmic history, and the solar system).
+
+Use the reference PDFs to verify accurate answers before responding.
+
+Follow the output rule that matches the question type:
+
+1. Multiple-choice question (answer options are visible):
+   - Map options from top to bottom starting with A (for example, A, B, C, D, or further down the alphabet if more options are shown).
+   - Output ONLY the single letter of the correct answer (no punctuation, explanation, or extra words).
+
+2. Open / non-multiple-choice question (no answer options are visible):
+   - Write out the answer directly.
+   - Keep the response strictly between 1 and 10 words (never more than 10 words).
 ```
 
 ## Privacy note
