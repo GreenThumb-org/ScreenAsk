@@ -31,6 +31,7 @@ DEFAULTS = {
     "opacity": 0.88,
     "font_size": 10,
     "width": 480,
+    "light_mode": False,
 }
 
 MOUSE_BUTTON_MAP = {
@@ -54,6 +55,7 @@ def load_config():
         cfg["model"] = DEFAULTS["model"]
     if str(cfg.get("api_key", "")).startswith("sk-ant"):
         cfg["api_key"] = ""
+    cfg["light_mode"] = bool(cfg.get("light_mode", False))
     return cfg
 
 
@@ -279,7 +281,7 @@ class App:
                     )
                     answer = (resp.text or "").strip() or "(empty answer)"
                     if idx > 0:
-                        answer = f"[Fallback: {model_name}]\n{answer}"
+                        answer = f"[Fallback]\n{answer}"
                     self.q.put(("show", answer))
                     return
                 except Exception as e:
@@ -306,12 +308,26 @@ class App:
     def show_overlay(self, text):
         self.close_overlay()
         self.current_text = text
+        light = bool(self.cfg.get("light_mode", False))
+
         w = self.overlay = tk.Toplevel(self.root)
         w.overrideredirect(True)
         w.attributes("-topmost", True)
-        w.attributes("-alpha", float(self.cfg["opacity"]))
+
+        if light:
+            transparent_bg = "#010101"
+            w.configure(bg=transparent_bg)
+            w.attributes("-transparentcolor", transparent_bg)
+            w.attributes("-alpha", 1.0)
+            box_bg = transparent_bg
+            text_fg = "#000000"
+        else:
+            w.attributes("-alpha", float(self.cfg["opacity"]))
+            box_bg = "#1e1e1e"
+            text_fg = "#f0f0f0"
+
         lbl = tk.Label(
-            w, text=text, bg="#1e1e1e", fg="#f0f0f0", justify="left",
+            w, text=text, bg=box_bg, fg=text_fg, justify="left",
             wraplength=int(self.cfg["width"]), padx=14, pady=10,
             font=("Segoe UI", int(self.cfg["font_size"])),
         )
@@ -437,9 +453,14 @@ class App:
         row(8, "Font size", "font_size")
         row(9, "Box width (px)", "width")
 
+        opts_frame = ttk.Frame(f)
+        opts_frame.grid(row=10, column=1, columnspan=2, sticky="w", pady=3)
+
         auto = tk.BooleanVar(value=get_autostart())
-        ttk.Checkbutton(f, text="Start with Windows", variable=auto).grid(
-            row=10, column=1, sticky="w", pady=3)
+        ttk.Checkbutton(opts_frame, text="Start with Windows", variable=auto).pack(side="left", padx=(0, 14))
+
+        light = tk.BooleanVar(value=bool(self.cfg.get("light_mode", False)))
+        ttk.Checkbutton(opts_frame, text="Light mode", variable=light).pack(side="left")
 
         status = tk.StringVar(value="Running in background. You can close this window.")
         ttk.Label(f, textvariable=status, foreground="gray").grid(
@@ -458,6 +479,7 @@ class App:
                     opacity=min(1.0, max(0.2, float(v["opacity"].get()))),
                     font_size=int(v["font_size"].get()),
                     width=int(v["width"].get()),
+                    light_mode=bool(light.get()),
                 )
             except ValueError:
                 messagebox.showerror("ScreenAsk", "A number field has an invalid value.")
