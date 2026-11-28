@@ -1,11 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
 mod autostart;
 mod capture;
 mod config;
 mod events;
 mod fonts;
-mod gemini;
 mod hooks;
 mod pdf;
 mod tray;

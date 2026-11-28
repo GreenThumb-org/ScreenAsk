@@ -2,7 +2,7 @@
 ; Installs to %LOCALAPPDATA%\Programs\ScreenAsk with zero UAC admin prompt.
 
 #define MyAppName "ScreenAsk"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "BB"
 #define MyAppURL "https://github.com/GreenThumb-org/ScreenAsk"
 #define MyAppExeName "screenask.exe"

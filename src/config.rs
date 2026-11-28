@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 pub const DEFAULT_MODEL: &str = "gemini-3.5-flash-lite";
 pub const DEFAULT_FALLBACK_MODEL: &str = "gemini-3.8-flash";
+pub const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
+pub const DEFAULT_CLAUDE_FALLBACK_MODEL: &str = "claude-haiku-4-5";
+pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
+pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_HOTKEY: &str = "f10";
 pub const DEFAULT_DISMISS_HOTKEY: &str = "escape";
 pub const DEFAULT_PROMPT: &str =
@@ -62,15 +66,69 @@ impl Default for HudTextAlign {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiProvider {
+    Gemini,
+    Claude,
+    OpenAi,
+}
+
+impl Default for ApiProvider {
+    fn default() -> Self {
+        Self::Gemini
+    }
+}
+
+impl ApiProvider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gemini => "Gemini (Google)",
+            Self::Claude => "Claude (Anthropic)",
+            Self::OpenAi => "OpenAI / Compatible",
+        }
+    }
+
+    pub fn env_var_name(self) -> &'static str {
+        match self {
+            Self::Gemini => "GEMINI_API_KEY",
+            Self::Claude => "ANTHROPIC_API_KEY",
+            Self::OpenAi => "OPENAI_API_KEY",
+        }
+    }
+
+    pub fn key_hint(self) -> &'static str {
+        match self {
+            Self::Gemini => "AIza...",
+            Self::Claude => "sk-ant-...",
+            Self::OpenAi => "sk-... (optional for local)",
+        }
+    }
+
+    pub fn default_models(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Gemini => (DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL),
+            Self::Claude => (DEFAULT_CLAUDE_MODEL, DEFAULT_CLAUDE_FALLBACK_MODEL),
+            Self::OpenAi => (DEFAULT_OPENAI_MODEL, ""),
+        }
+    }
+
+    pub const ALL: [Self; 3] = [Self::Gemini, Self::Claude, Self::OpenAi];
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub provider: ApiProvider,
     pub api_key: String,
+    pub api_base_url: String,
     pub model: String,
     pub fallback_model: String,
     pub hotkey: String,
     pub folder: String,
     pub save_screenshots: bool,
+    /// `None` means include all PDFs in `folder`; `Some(list)` includes only those filenames.
+    pub selected_pdfs: Option<Vec<String>>,
     pub prompt: String,
     pub overlay_seconds: u32,
     pub opacity: f32,
@@ -99,12 +157,15 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            provider: ApiProvider::Gemini,
             api_key: String::new(),
+            api_base_url: DEFAULT_OPENAI_BASE_URL.to_string(),
             model: DEFAULT_MODEL.to_string(),
             fallback_model: DEFAULT_FALLBACK_MODEL.to_string(),
             hotkey: DEFAULT_HOTKEY.to_string(),
             folder: default_screenshot_folder().to_string_lossy().into_owned(),
             save_screenshots: true,
+            selected_pdfs: None,
             prompt: DEFAULT_PROMPT.to_string(),
             overlay_seconds: 20,
             opacity: 0.88,
@@ -138,18 +199,28 @@ impl Config {
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
         }
-        std::env::var("GEMINI_API_KEY")
+        std::env::var(self.provider.env_var_name())
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     }
 
-    pub fn sanitize(&mut self) {
-        if self.model.trim().to_lowercase().starts_with("claude") || self.model.trim().is_empty() {
-            self.model = DEFAULT_MODEL.to_string();
+    pub fn is_local_openai_endpoint(&self) -> bool {
+        if self.provider != ApiProvider::OpenAi {
+            return false;
         }
-        if self.api_key.trim().starts_with("sk-ant") {
-            self.api_key.clear();
+        let lower = self.api_base_url.trim().to_lowercase();
+        lower.starts_with("http://localhost")
+            || lower.starts_with("http://127.0.0.1")
+            || lower.starts_with("http://[::1]")
+    }
+
+    pub fn sanitize(&mut self) {
+        if self.model.trim().is_empty() {
+            self.model = self.provider.default_models().0.to_string();
+        }
+        if self.api_base_url.trim().is_empty() {
+            self.api_base_url = DEFAULT_OPENAI_BASE_URL.to_string();
         }
         self.opacity = self.opacity.clamp(0.0, 1.0);
         self.font_size = self.font_size.clamp(2.0, 48.0);
@@ -237,8 +308,8 @@ mod tests {
     #[test]
     fn loads_legacy_python_config() {
         let python_json = r#"{
-            "api_key": "sk-ant-old",
-            "model": "claude-3-5-sonnet",
+            "api_key": "AIzaTestKey",
+            "model": "gemini-3.5-flash-lite",
             "fallback_model": "gemini-3.8-flash",
             "hotkey": "Mouse4",
             "folder": "C:\\Users\\Test\\Pictures\\ScreenAsk",
@@ -251,7 +322,8 @@ mod tests {
         }"#;
         let mut cfg: Config = serde_json::from_str(python_json).expect("should parse");
         cfg.sanitize();
-        assert_eq!(cfg.api_key, "");
+        assert_eq!(cfg.provider, ApiProvider::Gemini);
+        assert_eq!(cfg.api_key, "AIzaTestKey");
         assert_eq!(cfg.model, DEFAULT_MODEL);
         assert_eq!(cfg.hotkey, "mouse4");
         assert_eq!(cfg.opacity, 1.0);

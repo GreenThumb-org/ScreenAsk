@@ -1,7 +1,7 @@
 use crate::config::{Config, DismissMode};
 use crate::events::{AppEvent, RecordingTarget};
 use crossbeam_channel::Sender;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -89,13 +89,9 @@ fn parse_mouse_button(name: &str) -> Option<MouseBtn> {
 }
 
 fn name_to_vk(name: &str) -> Option<u32> {
-    if name.len() == 1 {
-        let ch = name.chars().next()?;
-        if ch.is_ascii_alphabetic() {
-            return Some(ch.to_ascii_uppercase() as u32);
-        }
-        if ch.is_ascii_digit() {
-            return Some(ch as u32);
+    if let Some(hex) = name.strip_prefix("vk_") {
+        if let Ok(vk) = u32::from_str_radix(hex, 16) {
+            return Some(vk);
         }
     }
 
@@ -115,41 +111,147 @@ fn name_to_vk(name: &str) -> Option<u32> {
         }
     }
 
-    let vk = match name {
-        "esc" | "escape" => 0x1B,
-        "space" | "spacebar" => 0x20,
-        "enter" | "return" => 0x0D,
-        "tab" => 0x09,
-        "backspace" => 0x08,
-        "insert" | "ins" => 0x2D,
-        "delete" | "del" => 0x2E,
-        "home" => 0x24,
-        "end" => 0x23,
-        "pageup" | "pgup" | "page up" => 0x21,
-        "pagedown" | "pgdn" | "page down" => 0x22,
-        "left" => 0x25,
-        "up" => 0x26,
-        "right" => 0x27,
-        "down" => 0x28,
-        "printscreen" | "prtsc" | "print screen" | "snapshot" => 0x2C,
-        "pause" => 0x13,
-        "scrolllock" | "scroll lock" => 0x91,
-        "capslock" | "caps lock" => 0x14,
-        "numlock" | "num lock" => 0x90,
-        "-" | "minus" => 0xBD,
-        "=" | "plus" | "equals" => 0xBB,
-        "[" | "lbracket" => 0xDB,
-        "]" | "rbracket" => 0xDD,
-        "\\" | "backslash" => 0xDC,
-        ";" | "semicolon" => 0xBA,
-        "'" | "quote" => 0xDE,
-        "," | "comma" => 0xBC,
-        "." | "period" => 0xBE,
-        "/" | "slash" => 0xBF,
-        "`" | "grave" | "tilde" => 0xC0,
-        _ => return None,
+    let named = match name {
+        "esc" | "escape" => Some(0x1B),
+        "space" | "spacebar" => Some(0x20),
+        "enter" | "return" => Some(0x0D),
+        "tab" => Some(0x09),
+        "backspace" => Some(0x08),
+        "insert" | "ins" => Some(0x2D),
+        "delete" | "del" => Some(0x2E),
+        "home" => Some(0x24),
+        "end" => Some(0x23),
+        "pageup" | "pgup" | "page up" => Some(0x21),
+        "pagedown" | "pgdn" | "page down" => Some(0x22),
+        "left" | "arrow_left" => Some(0x25),
+        "up" | "arrow_up" => Some(0x26),
+        "right" | "arrow_right" => Some(0x27),
+        "down" | "arrow_down" => Some(0x28),
+        "printscreen" | "prtsc" | "print screen" | "snapshot" => Some(0x2C),
+        "pause" => Some(0x13),
+        "scrolllock" | "scroll lock" => Some(0x91),
+        "capslock" | "caps lock" => Some(0x14),
+        "numlock" | "num lock" => Some(0x90),
+        "apps" | "menu" => Some(0x5D),
+        "numpad_mul" | "numpad*" | "multiply" => Some(0x6A),
+        "numpad_add" | "add" => Some(0x6B),
+        "numpad_sub" | "numpad-" | "subtract" => Some(0x6D),
+        "numpad_dec" | "numpad." | "decimal" => Some(0x6E),
+        "numpad_div" | "numpad/" | "divide" => Some(0x6F),
+        "volume_mute" => Some(0xAD),
+        "volume_down" => Some(0xAE),
+        "volume_up" => Some(0xAF),
+        "media_next" => Some(0xB0),
+        "media_prev" => Some(0xB1),
+        "media_stop" => Some(0xB2),
+        "media_play_pause" => Some(0xB3),
+        "plus" | "equals" => Some(0xBB),
+        "minus" => Some(0xBD),
+        "comma" => Some(0xBC),
+        "period" => Some(0xBE),
+        _ => None,
     };
-    Some(vk)
+    if named.is_some() {
+        return named;
+    }
+
+    // Single Unicode character (supports a-z, 0-9, German ä/ö/ü/ß/<, #, ^, ´, etc.)
+    let mut chars = name.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next()) {
+        if ch.is_ascii_alphabetic() {
+            return Some(ch.to_ascii_uppercase() as u32);
+        }
+        if ch.is_ascii_digit() {
+            return Some(ch as u32);
+        }
+
+        #[cfg(windows)]
+        {
+            if let Some(vk) = char_to_vk_windows(ch) {
+                return Some(vk);
+            }
+        }
+
+        // Static fallback for common OEM chars if layout scan didn't match
+        let fallback = match ch {
+            '-' => 0xBD,
+            '=' => 0xBB,
+            '[' | 'ß' => 0xDB,
+            ']' | '´' => 0xDD,
+            '\\' | '^' => 0xDC,
+            ';' | 'ü' => 0xBA,
+            '\'' | 'ä' => 0xDE,
+            ',' => 0xBC,
+            '.' => 0xBE,
+            '/' | '#' => 0xBF,
+            '`' | 'ö' => 0xC0,
+            '<' => 0xE2,
+            _ => return None,
+        };
+        return Some(fallback);
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn active_keyboard_layout() -> windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        let tid = if !fg.is_null() {
+            GetWindowThreadProcessId(fg, std::ptr::null_mut())
+        } else {
+            0
+        };
+        let hkl = GetKeyboardLayout(tid);
+        if hkl.is_null() {
+            GetKeyboardLayout(0)
+        } else {
+            hkl
+        }
+    }
+}
+
+#[cfg(windows)]
+fn char_to_vk_windows(ch: char) -> Option<u32> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::VkKeyScanExW;
+    let mut utf16 = [0u16; 2];
+    let encoded = ch.encode_utf16(&mut utf16);
+    if encoded.len() != 1 {
+        return None;
+    }
+    unsafe {
+        let hkl = active_keyboard_layout();
+        let res = VkKeyScanExW(encoded[0], hkl);
+        if res == -1 {
+            None
+        } else {
+            Some((res & 0xFF) as u32)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn vk_to_char_windows(vk: u32) -> Option<char> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyExW, MAPVK_VK_TO_CHAR};
+    unsafe {
+        let hkl = active_keyboard_layout();
+        let mapped = MapVirtualKeyExW(vk, MAPVK_VK_TO_CHAR, hkl);
+        // Strip dead-key high bit (0x8000_0000) so dead keys like ^ and ´ still produce their char!
+        let code_unit = mapped & 0xFFFF;
+        if code_unit == 0 {
+            return None;
+        }
+        let ch = char::from_u32(code_unit)?;
+        if ch.is_control() || ch.is_whitespace() {
+            return None;
+        }
+        ch.to_lowercase().next()
+    }
 }
 
 fn vk_to_name(vk: u32) -> Option<String> {
@@ -165,41 +267,62 @@ fn vk_to_name(vk: u32) -> Option<String> {
     if (0x60..=0x69).contains(&vk) {
         return Some(format!("numpad{}", vk - 0x60));
     }
-    let s = match vk {
-        0x1B => "escape",
-        0x20 => "space",
-        0x0D => "enter",
-        0x09 => "tab",
-        0x08 => "backspace",
-        0x2D => "insert",
-        0x2E => "delete",
-        0x24 => "home",
-        0x23 => "end",
-        0x21 => "pageup",
-        0x22 => "pagedown",
-        0x25 => "left",
-        0x26 => "up",
-        0x27 => "right",
-        0x28 => "down",
-        0x2C => "printscreen",
-        0x13 => "pause",
-        0x91 => "scrolllock",
-        0x14 => "capslock",
-        0x90 => "numlock",
-        0xBD => "-",
-        0xBB => "=",
-        0xDB => "[",
-        0xDD => "]",
-        0xDC => "\\",
-        0xBA => ";",
-        0xDE => "'",
-        0xBC => ",",
-        0xBE => ".",
-        0xBF => "/",
-        0xC0 => "`",
-        _ => return None,
+
+    let named = match vk {
+        0x1B => Some("escape"),
+        0x20 => Some("space"),
+        0x0D => Some("enter"),
+        0x09 => Some("tab"),
+        0x08 => Some("backspace"),
+        0x2D => Some("insert"),
+        0x2E => Some("delete"),
+        0x24 => Some("home"),
+        0x23 => Some("end"),
+        0x21 => Some("pageup"),
+        0x22 => Some("pagedown"),
+        0x25 => Some("arrow_left"),
+        0x26 => Some("arrow_up"),
+        0x27 => Some("arrow_right"),
+        0x28 => Some("arrow_down"),
+        0x2C => Some("printscreen"),
+        0x13 => Some("pause"),
+        0x91 => Some("scrolllock"),
+        0x14 => Some("capslock"),
+        0x90 => Some("numlock"),
+        0x5D => Some("apps"),
+        0x6A => Some("numpad_mul"),
+        0x6B => Some("numpad_add"),
+        0x6D => Some("numpad_sub"),
+        0x6E => Some("numpad_dec"),
+        0x6F => Some("numpad_div"),
+        0xAD => Some("volume_mute"),
+        0xAE => Some("volume_down"),
+        0xAF => Some("volume_up"),
+        0xB0 => Some("media_next"),
+        0xB1 => Some("media_prev"),
+        0xB2 => Some("media_stop"),
+        0xB3 => Some("media_play_pause"),
+        _ => None,
     };
-    Some(s.to_string())
+    if let Some(s) = named {
+        return Some(s.to_string());
+    }
+
+    // Query active Windows keyboard layout (handles German ä, ö, ü, ß, <, #, ^, ´, etc.)
+    #[cfg(windows)]
+    if let Some(ch) = vk_to_char_windows(vk) {
+        if ch == '+' {
+            return Some("plus".to_string());
+        }
+        return Some(ch.to_string());
+    }
+
+    // Universal fallback so EVERY physical/OEM key on any keyboard can still be bound!
+    if vk > 0 && vk <= 0xFF {
+        return Some(format!("vk_{vk:02x}"));
+    }
+
+    None
 }
 
 fn is_modifier_vk(vk: u32) -> bool {
@@ -251,6 +374,7 @@ static HOOK_SHARED: OnceLock<Arc<HookShared>> = OnceLock::new();
 pub struct HookManager {
     shared: Arc<HookShared>,
     thread_id: Arc<AtomicU32>,
+    stop_flag: Arc<AtomicBool>,
 }
 
 impl HookManager {
@@ -271,14 +395,25 @@ impl HookManager {
 
         let _ = HOOK_SHARED.set(Arc::clone(&shared));
         let thread_id = Arc::new(AtomicU32::new(0));
+        let stop_flag = Arc::new(AtomicBool::new(false));
         let tid_clone = Arc::clone(&thread_id);
+        let stop_clone = Arc::clone(&stop_flag);
 
         #[cfg(windows)]
-        thread::spawn(move || {
-            run_windows_hook_loop(tid_clone);
-        });
+        {
+            thread::spawn(move || {
+                run_windows_mouse_hook_loop(tid_clone);
+            });
+            thread::spawn(move || {
+                run_windows_keyboard_poll_loop(stop_clone);
+            });
+        }
 
-        Self { shared, thread_id }
+        Self {
+            shared,
+            thread_id,
+            stop_flag,
+        }
     }
 
     pub fn set_egui_ctx(&self, ctx: egui::Context) {
@@ -324,6 +459,7 @@ impl HookManager {
     }
 
     pub fn shutdown(&self) {
+        self.stop_flag.store(true, Ordering::SeqCst);
         #[cfg(windows)]
         {
             let tid = self.thread_id.load(Ordering::SeqCst);
@@ -368,7 +504,7 @@ fn handle_key_down(vk: u32) {
             return;
         }
         if let Some(rec) = st.recording.clone() {
-            if !is_modifier_vk(vk) && rec.started_at.elapsed() >= Duration::from_millis(200) {
+            if !is_modifier_vk(vk) && rec.started_at.elapsed() >= Duration::from_millis(50) {
                 if let Some(name) = vk_to_name(vk) {
                     let mut parts = Vec::new();
                     if alt {
@@ -518,17 +654,36 @@ fn handle_mouse_down(btn: MouseBtn) {
 }
 
 #[cfg(windows)]
-unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
-    };
+fn run_windows_keyboard_poll_loop(stop_flag: Arc<AtomicBool>) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
-    if code == HC_ACTION as i32 && (wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize)
-    {
-        let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
-        handle_key_down(kb.vkCode);
+    // Track previous pressed state for all virtual keys so we trigger cleanly on rising edges.
+    // Works reliably across all keyboard layouts (including German ä/ö/ü/ß), elevated windows,
+    // and environments where WH_KEYBOARD_LL is blocked or filtered.
+    let mut prev_down = [false; 256];
+
+    // Seed initial state so keys already held at startup do not fire.
+    unsafe {
+        for vk in 0x08..=0xFEusize {
+            prev_down[vk] = (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
+        }
     }
-    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+
+    while !stop_flag.load(Ordering::Relaxed) {
+        unsafe {
+            for vk in 0x08..=0xFEusize {
+                let is_down = (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0;
+                if is_down && !prev_down[vk] {
+                    let vk_u32 = vk as u32;
+                    if !is_modifier_vk(vk_u32) {
+                        handle_key_down(vk_u32);
+                    }
+                }
+                prev_down[vk] = is_down;
+            }
+        }
+        thread::sleep(Duration::from_millis(12));
+    }
 }
 
 #[cfg(windows)]
@@ -562,18 +717,17 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: usize, lparam: isize) ->
 }
 
 #[cfg(windows)]
-fn run_windows_hook_loop(thread_id: Arc<AtomicU32>) {
+fn run_windows_mouse_hook_loop(thread_id: Arc<AtomicU32>) {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
-        MSG, WH_KEYBOARD_LL, WH_MOUSE_LL,
+        MSG, WH_MOUSE_LL,
     };
 
     unsafe {
         thread_id.store(GetCurrentThreadId(), Ordering::SeqCst);
         let hmod = GetModuleHandleW(std::ptr::null());
-        let kb_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0);
         let ms_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0);
 
         let mut msg: MSG = std::mem::zeroed();
@@ -582,9 +736,6 @@ fn run_windows_hook_loop(thread_id: Arc<AtomicU32>) {
             DispatchMessageW(&msg);
         }
 
-        if !kb_hook.is_null() {
-            UnhookWindowsHookEx(kb_hook);
-        }
         if !ms_hook.is_null() {
             UnhookWindowsHookEx(ms_hook);
         }
@@ -622,6 +773,22 @@ mod tests {
         assert_eq!(
             parse_binding("mouse_middle"),
             Some(Binding::Mouse(MouseBtn::Middle))
+        );
+        // German & universal VK bindings
+        assert!(parse_binding("ä").is_some());
+        assert!(parse_binding("ö").is_some());
+        assert!(parse_binding("ü").is_some());
+        assert!(parse_binding("ß").is_some());
+        assert!(parse_binding("plus").is_some());
+        assert_eq!(
+            parse_binding("vk_e2"),
+            Some(Binding::Key {
+                vk: 0xE2,
+                ctrl: false,
+                shift: false,
+                alt: false,
+                win: false
+            })
         );
     }
 }

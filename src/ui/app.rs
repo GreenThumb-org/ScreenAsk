@@ -1,9 +1,9 @@
+use crate::ai::ask_ai;
 use crate::autostart::set_autostart;
 use crate::capture::{capture_monitor, encode_for_gemini, save_screenshot_png};
 use crate::config::{save_config, Config};
 use crate::events::{AppEvent, RecordingTarget};
 use crate::fonts::{apply_font, discover_available_fonts};
-use crate::gemini::ask_gemini;
 use crate::hooks::HookManager;
 use crate::pdf::load_pdf_sources;
 use crate::tray::TrayHandle;
@@ -300,9 +300,10 @@ impl ScreenAskApp {
                 if cfg.save_screenshots {
                     let _ = save_screenshot_png(&img, &folder);
                 }
-                let pdf_context = load_pdf_sources(&folder);
+                let pdf_context =
+                    load_pdf_sources(&folder, cfg.selected_pdfs.as_deref());
                 let jpeg = encode_for_gemini(&img)?;
-                ask_gemini(&cfg, &jpeg, &pdf_context)
+                ask_ai(&cfg, &jpeg, &pdf_context)
             })();
 
             let text = match result {
@@ -352,8 +353,7 @@ impl ScreenAskApp {
                         }
                     }
                     self.form.recording = None;
-                    self.form
-                        .set_status("Hotkey recorded. Click Save to apply.", false);
+                    self.auto_save_customization();
                 }
                 AppEvent::Quit => {
                     self.auto_save_customization();

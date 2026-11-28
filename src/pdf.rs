@@ -18,8 +18,63 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, CachedPdf>> {
     PDF_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn load_pdf_sources(folder: &Path) -> String {
-    let paths = list_pdf_paths(folder);
+/// Returns sorted `.pdf` filenames currently inside `folder`.
+pub fn list_pdf_names(folder: &Path) -> Vec<String> {
+    list_pdf_paths(folder)
+        .into_iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect()
+}
+
+/// Copies a `.pdf` file into `folder` and returns its destination filename.
+pub fn copy_pdf_into_folder(src: &Path, folder: &Path) -> Result<String, String> {
+    let is_pdf = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false);
+    if !is_pdf {
+        return Err("Only .pdf files can be added as reference documents.".to_string());
+    }
+    let file_name = src
+        .file_name()
+        .ok_or_else(|| "Invalid PDF file path.".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    fs::create_dir_all(folder).map_err(|e| format!("Failed to create folder: {e}"))?;
+    let dest = folder.join(&file_name);
+
+    // Skip copying onto itself if the file is already inside the target folder.
+    let same_file = fs::canonicalize(src)
+        .ok()
+        .zip(fs::canonicalize(&dest).ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+
+    if !same_file {
+        fs::copy(src, &dest).map_err(|e| format!("Failed to copy {file_name}: {e}"))?;
+    }
+    Ok(file_name)
+}
+
+/// Loads text from `.pdf` files in `folder`.
+/// If `selected_pdfs` is `Some(list)`, only PDFs whose filenames are in `list` are included.
+pub fn load_pdf_sources(folder: &Path, selected_pdfs: Option<&[String]>) -> String {
+    let paths: Vec<PathBuf> = list_pdf_paths(folder)
+        .into_iter()
+        .filter(|p| match selected_pdfs {
+            None => true,
+            Some(allowed) => p
+                .file_name()
+                .map(|n| {
+                    let name = n.to_string_lossy();
+                    allowed.iter().any(|a| a.eq_ignore_ascii_case(&name))
+                })
+                .unwrap_or(false),
+        })
+        .collect();
+
     if paths.is_empty() {
         return String::new();
     }

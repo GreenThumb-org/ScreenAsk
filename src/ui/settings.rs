@@ -1,7 +1,8 @@
 use crate::autostart::get_autostart;
-use crate::config::{Config, DismissMode};
+use crate::config::{ApiProvider, Config, DismissMode};
 use crate::events::RecordingTarget;
 use crate::fonts::FontOption;
+use crate::pdf::{copy_pdf_into_folder, list_pdf_names};
 use crate::ui::color_picker::AccentColorPicker;
 use crate::ui::icons::{paint_icon, TitleIcon};
 use crate::ui::theme::{
@@ -11,6 +12,7 @@ use egui::{
     Align2, Button, Color32, ComboBox, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText,
     Sense, Stroke, TextEdit, TopBottomPanel, Ui, Vec2,
 };
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -26,7 +28,7 @@ impl SettingsTab {
             Self::Capture => "Capture & PDFs",
             Self::Overlay => "Overlay",
             Self::Style => "Style",
-            Self::Api => "Gemini API",
+            Self::Api => "AI Provider & API",
         }
     }
 
@@ -67,6 +69,8 @@ pub struct SettingsForm {
     pub color_picker: AccentColorPicker,
     pub available_fonts: Vec<FontOption>,
     pub font_search: String,
+    pub folder_pdfs: Vec<String>,
+    pub pdf_picker_open: bool,
     pub measured_content_h: f32,
     pub status_error: Option<String>,
 }
@@ -74,12 +78,13 @@ pub struct SettingsForm {
 impl SettingsForm {
     pub fn new(cfg: Config, available_fonts: Vec<FontOption>) -> Self {
         let autostart = get_autostart();
-        let active_tab = if cfg.effective_api_key().is_none() {
+        let active_tab = if cfg.effective_api_key().is_none() && !cfg.is_local_openai_endpoint() {
             SettingsTab::Api
         } else {
             SettingsTab::Capture
         };
         let color_picker = AccentColorPicker::new(cfg.accent_color);
+        let folder_pdfs = list_pdf_names(&PathBuf::from(&cfg.folder));
         Self {
             cfg,
             active_tab,
@@ -89,6 +94,8 @@ impl SettingsForm {
             color_picker,
             available_fonts,
             font_search: String::new(),
+            folder_pdfs,
+            pdf_picker_open: false,
             measured_content_h: 255.0,
             status_error: None,
         }
@@ -107,7 +114,61 @@ impl SettingsForm {
         (w, h)
     }
 
-    pub fn refresh_pdf_count(&mut self) {}
+    pub fn refresh_pdf_count(&mut self) {
+        self.folder_pdfs = list_pdf_names(&PathBuf::from(&self.cfg.folder));
+    }
+
+    pub fn is_pdf_selected(&self, name: &str) -> bool {
+        match &self.cfg.selected_pdfs {
+            None => true,
+            Some(list) => list.iter().any(|s| s.eq_ignore_ascii_case(name)),
+        }
+    }
+
+    pub fn set_pdf_selected(&mut self, name: &str, selected: bool) {
+        let mut list = match &self.cfg.selected_pdfs {
+            Some(existing) => existing.clone(),
+            None => self.folder_pdfs.clone(),
+        };
+        if selected {
+            if !list.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                list.push(name.to_string());
+            }
+        } else {
+            list.retain(|s| !s.eq_ignore_ascii_case(name));
+        }
+        self.cfg.selected_pdfs = Some(list);
+    }
+
+    pub fn add_dropped_pdfs(&mut self, paths: &[PathBuf]) -> bool {
+        let folder = PathBuf::from(&self.cfg.folder);
+        let mut added_any = false;
+        let mut last_err = None;
+
+        for p in paths {
+            match copy_pdf_into_folder(p, &folder) {
+                Ok(filename) => {
+                    added_any = true;
+                    if let Some(list) = &mut self.cfg.selected_pdfs {
+                        if !list.iter().any(|s| s.eq_ignore_ascii_case(&filename)) {
+                            list.push(filename);
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        if added_any {
+            self.refresh_pdf_count();
+            self.status_error = None;
+        } else if let Some(err) = last_err {
+            self.status_error = Some(err);
+        }
+        added_any
+    }
 
     pub fn set_status(&mut self, msg: impl Into<String>, is_error: bool) {
         if is_error {
@@ -303,7 +364,7 @@ impl SettingsForm {
                                 .color(Color32::from_rgb(255, 117, 107)),
                         );
                     } else {
-                        ui.label(RichText::new("v1.0 by BB").size(11.5).weak());
+                        ui.label(RichText::new("v1.1 by BB").size(11.5).weak());
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -370,6 +431,41 @@ impl SettingsForm {
             egui::StrokeKind::Inside,
         );
 
+        // Handle OS drag-and-drop of PDF files anywhere onto the ScreenAsk window
+        let dropped_paths: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if !dropped_paths.is_empty() && self.add_dropped_pdfs(&dropped_paths) {
+            action = SettingsAction::Save;
+        }
+
+        // Visual drag-over drop banner when dragging files over the window
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let drop_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("pdf_drop_overlay"),
+            ));
+            let r = ctx.screen_rect().shrink(8.0);
+            drop_painter.rect(
+                r,
+                CornerRadius::same(12),
+                Color32::from_rgba_unmultiplied(12, 12, 14, 215),
+                Stroke::new(2.0, accent),
+                egui::StrokeKind::Inside,
+            );
+            drop_painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                "Drop PDF file(s) to copy into ScreenAsk folder",
+                FontId::proportional(14.0),
+                Color32::WHITE,
+            );
+        }
+
         // Floating Blur-style HSV accent color popover
         if self
             .color_picker
@@ -422,7 +518,7 @@ impl SettingsForm {
                 let save_subtitle = if self.cfg.save_screenshots {
                     "Enabled — PNGs are saved to your folder."
                 } else {
-                    "Disabled — sent to Gemini without saving PNGs."
+                    "Disabled — sent to AI without saving PNGs."
                 };
                 setting_row(ui, "Save Screenshots", save_subtitle, |ui| {
                     if blur_toggle(ui, &mut self.cfg.save_screenshots, accent, light).changed() {
@@ -439,11 +535,11 @@ impl SettingsForm {
 
                 row_divider(ui);
 
-                // Row 3: Screenshots & Reference PDFs Folder
+                // Row 3: Screenshots & PDFs Folder (Browse + Open on top row, full-width path underneath)
                 setting_row(
                     ui,
                     "Screenshots & PDFs Folder",
-                    "Any .pdf files here are auto-loaded as context with each image.",
+                    "Directory for saved PNGs and reference PDFs.",
                     |ui| {
                         if ui.button("Open").clicked() {
                             *action = SettingsAction::OpenFolder;
@@ -451,18 +547,141 @@ impl SettingsForm {
                         if ui.button("Browse").clicked() {
                             if let Some(path) = rfd::FileDialog::new().pick_folder() {
                                 self.cfg.folder = path.to_string_lossy().into_owned();
+                                self.refresh_pdf_count();
+                                *action = SettingsAction::Save;
                             }
                         }
-                        ui.add(TextEdit::singleline(&mut self.cfg.folder).desired_width(155.0));
                     },
                 );
+                ui.add_space(4.0);
+                let path_resp = ui.add(
+                    TextEdit::singleline(&mut self.cfg.folder)
+                        .desired_width(ui.available_width()),
+                );
+                if path_resp.lost_focus() {
+                    self.refresh_pdf_count();
+                }
 
                 row_divider(ui);
 
-                // Row 4: Prompt (full-width multiline editor underneath title + description)
+                // Row 4: Reference PDFs (button to select which PDFs are sent + Add PDF + drag-and-drop)
+                let total_pdfs = self.folder_pdfs.len();
+                let selected_count = self
+                    .folder_pdfs
+                    .iter()
+                    .filter(|n| self.is_pdf_selected(n))
+                    .count();
+                let pdf_subtitle = if total_pdfs == 0 {
+                    "No PDFs in folder · Drag & drop PDFs here.".to_string()
+                } else {
+                    format!(
+                        "{selected_count} of {total_pdfs} selected · Drag & drop PDFs here."
+                    )
+                };
+
+                setting_row(ui, "Reference PDFs", &pdf_subtitle, |ui| {
+                    let sel_label = if self.pdf_picker_open {
+                        "Hide PDFs"
+                    } else {
+                        "Select PDFs"
+                    };
+                    let sel_btn = Button::new(RichText::new(sel_label).size(12.0)).stroke(
+                        if self.pdf_picker_open {
+                            Stroke::new(1.0, accent)
+                        } else {
+                            Stroke::new(1.0, Color32::from_rgba_unmultiplied(251, 254, 254, 42))
+                        },
+                    );
+                    if ui.add(sel_btn).clicked() {
+                        self.pdf_picker_open = !self.pdf_picker_open;
+                        if self.pdf_picker_open {
+                            self.refresh_pdf_count();
+                        }
+                    }
+
+                    if ui.button("Add PDF").clicked() {
+                        if let Some(files) = rfd::FileDialog::new()
+                            .add_filter("PDF Documents", &["pdf"])
+                            .pick_files()
+                        {
+                            if self.add_dropped_pdfs(&files) {
+                                *action = SettingsAction::Save;
+                            }
+                        }
+                    }
+                });
+
+                if self.pdf_picker_open {
+                    ui.add_space(6.0);
+                    let box_fill = if light {
+                        Color32::from_rgb(242, 242, 245)
+                    } else {
+                        Color32::from_rgb(18, 18, 20)
+                    };
+                    Frame::NONE
+                        .fill(box_fill)
+                        .stroke(Stroke::new(
+                            1.0,
+                            if light {
+                                Color32::from_rgb(190, 190, 196)
+                            } else {
+                                Color32::from_rgba_unmultiplied(251, 254, 254, 28)
+                            },
+                        ))
+                        .corner_radius(CornerRadius::same(8))
+                        .inner_margin(Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                if ui.small_button("Select All").clicked() {
+                                    self.cfg.selected_pdfs = Some(self.folder_pdfs.clone());
+                                    *action = SettingsAction::Save;
+                                }
+                                if ui.small_button("Select None").clicked() {
+                                    self.cfg.selected_pdfs = Some(Vec::new());
+                                    *action = SettingsAction::Save;
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button("Refresh").clicked() {
+                                            self.refresh_pdf_count();
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(4.0);
+                            if self.folder_pdfs.is_empty() {
+                                ui.label(
+                                    RichText::new(
+                                        "No .pdf files found. Drag & drop a PDF onto this window or click Add PDF.",
+                                    )
+                                    .size(11.0)
+                                    .weak(),
+                                );
+                            } else {
+                                let pdfs_snapshot = self.folder_pdfs.clone();
+                                egui::ScrollArea::vertical()
+                                    .max_height(110.0)
+                                    .show(ui, |ui| {
+                                        for name in &pdfs_snapshot {
+                                            let mut checked = self.is_pdf_selected(name);
+                                            if ui.checkbox(&mut checked, name).changed() {
+                                                self.set_pdf_selected(name, checked);
+                                                *action = SettingsAction::Save;
+                                            }
+                                        }
+                                    });
+                            }
+                        });
+                }
+
+                row_divider(ui);
+
+                // Row 5: Prompt (full-width multiline editor underneath title + description)
                 ui.label(RichText::new("Prompt").strong());
                 ui.label(
-                    RichText::new("Instruction sent to Gemini with every screenshot.")
+                    RichText::new("Instruction sent to the AI with every screenshot.")
                         .size(11.0)
                         .weak(),
                 );
@@ -752,30 +971,75 @@ impl SettingsForm {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
+                // Row 1: Provider Selector
+                let prev_provider = self.cfg.provider;
                 setting_row(
                     ui,
-                    "API Key",
-                    "Google AI Studio key (or GEMINI_API_KEY).",
+                    "AI Provider",
+                    "Choose Gemini, Claude, or any OpenAI-compatible API.",
                     |ui| {
-                        let toggle_label = if self.show_api_key { "Hide" } else { "Show" };
-                        if ui.button(toggle_label).clicked() {
-                            self.show_api_key = !self.show_api_key;
-                        }
-                        ui.add(
-                            TextEdit::singleline(&mut self.cfg.api_key)
-                                .password(!self.show_api_key)
-                                .hint_text("AIza...")
-                                .desired_width(175.0),
-                        );
+                        ComboBox::from_id_salt("api_provider_combo")
+                            .selected_text(self.cfg.provider.label())
+                            .width(220.0)
+                            .show_ui(ui, |ui| {
+                                for p in ApiProvider::ALL {
+                                    ui.selectable_value(&mut self.cfg.provider, p, p.label());
+                                }
+                            });
                     },
                 );
+                if self.cfg.provider != prev_provider {
+                    let (def_primary, def_fallback) = self.cfg.provider.default_models();
+                    self.cfg.model = def_primary.to_string();
+                    self.cfg.fallback_model = def_fallback.to_string();
+                }
+
+                // Optional Row: Base URL (for OpenAI / OpenRouter / Groq / Ollama / LM Studio)
+                if self.cfg.provider == ApiProvider::OpenAi {
+                    row_divider(ui);
+                    setting_row(
+                        ui,
+                        "Base URL",
+                        "OpenAI, OpenRouter, Groq, or local Ollama endpoint.",
+                        |ui| {
+                            ui.add(
+                                TextEdit::singleline(&mut self.cfg.api_base_url)
+                                    .hint_text("https://api.openai.com/v1")
+                                    .desired_width(220.0),
+                            );
+                        },
+                    );
+                }
 
                 row_divider(ui);
 
+                // Row: API Key
+                let key_desc = format!(
+                    "API key for {} (or {}).",
+                    self.cfg.provider.label(),
+                    self.cfg.provider.env_var_name()
+                );
+                let key_hint = self.cfg.provider.key_hint();
+                setting_row(ui, "API Key", &key_desc, |ui| {
+                    let toggle_label = if self.show_api_key { "Hide" } else { "Show" };
+                    if ui.button(toggle_label).clicked() {
+                        self.show_api_key = !self.show_api_key;
+                    }
+                    ui.add(
+                        TextEdit::singleline(&mut self.cfg.api_key)
+                            .password(!self.show_api_key)
+                            .hint_text(key_hint)
+                            .desired_width(175.0),
+                    );
+                });
+
+                row_divider(ui);
+
+                // Row: Primary Model
                 setting_row(
                     ui,
                     "Primary Model",
-                    "Default Gemini model used for vision requests.",
+                    "Default vision model used for requests.",
                     |ui| {
                         ui.add(TextEdit::singleline(&mut self.cfg.model).desired_width(220.0));
                     },
@@ -783,10 +1047,11 @@ impl SettingsForm {
 
                 row_divider(ui);
 
+                // Row: Fallback Model
                 setting_row(
                     ui,
                     "Fallback Model",
-                    "Retried automatically on 429 / 503 / 500.",
+                    "Retried automatically on 429 / 503 / 529 / 500.",
                     |ui| {
                         ui.add(
                             TextEdit::singleline(&mut self.cfg.fallback_model)
